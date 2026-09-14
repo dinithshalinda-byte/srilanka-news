@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="si">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>News Admin Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, 'Noto Sans Sinhala', sans-serif; background: #f5f7fb; padding: 20px; color: #1e293b; }
+  .container { max-width: 900px; margin: 0 auto; }
+  h1 { color: #c40000; margin-bottom: 20px; }
+  .card { background: white; padding: 20px; border-radius: 16px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); margin-bottom: 20px; }
+  .card h2 { font-size: 1.1rem; margin-bottom: 15px; color: #475569; }
+  input, textarea, select { width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 10px; font-family: inherit; font-size: 0.95rem; }
+  textarea { min-height: 100px; resize: vertical; }
+  button { background: #c40000; color: white; border: none; padding: 10px 20px; border-radius: 10px; cursor: pointer; font-size: 0.95rem; margin-right: 8px; margin-top: 5px; }
+  button.secondary { background: #64748b; }
+  button.danger { background: #ef4444; }
+  button:hover { opacity: 0.9; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .news-item { background: #f8fafc; padding: 14px; border-radius: 10px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .news-item .info { flex: 1; min-width: 200px; }
+  .news-item .info h3 { font-size: 0.95rem; margin-bottom: 4px; }
+  .news-item .info small { color: #64748b; }
+  .status { padding: 10px 14px; border-radius: 10px; margin-bottom: 15px; display: none; }
+  .status.ok { background: #d1fae5; color: #065f46; display: block; }
+  .status.err { background: #fee2e2; color: #991b1b; display: block; }
+  .hint { font-size: 0.8rem; color: #64748b; margin-bottom: 10px; }
+  .help-box { background: #eff6ff; border-left: 4px solid #3b82f6; padding: 12px; border-radius: 8px; margin-bottom: 15px; font-size: 0.85rem; color: #1e40af; }
+  .help-box a { color: #1d4ed8; }
+  @media (max-width: 600px) { .row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>📰 News Admin Dashboard</h1>
+  <div id="status" class="status"></div>
+
+  <div class="card">
+    <h2>⚙️ GitHub Settings (එක වරක් පමණක් පුරවන්න)</h2>
+    <div class="help-box">
+      <strong>Token එකක් හදාගන්නේ කොහොමද?</strong><br>
+      1. GitHub → Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b><br>
+      2. Generate new token → Repository access: <b>Only select repositories</b> → ඔයාගේ repo එක තෝරන්න<br>
+      3. Permissions → Repository permissions → <b>Contents: Read and write</b> දෙන්න<br>
+      4. Generate → Token එක copy කරගෙන පහල field එකට paste කරන්න
+    </div>
+    <p class="hint">මේක browser එකේ save වෙනවා. ආයෙ පුරවන්න ඕන නෑ.</p>
+    <input id="token" type="password" placeholder="GitHub Personal Access Token (github_pat_... හෝ ghp_...)">
+    <div class="row">
+      <input id="owner" placeholder="GitHub Username">
+      <input id="repo" placeholder="Repository Name (උදා: newssrilanka24)">
+    </div>
+    <div class="row">
+      <input id="branch" placeholder="Branch" value="main">
+      <input id="filepath" placeholder="File path" value="news.json">
+    </div>
+    <button id="saveConfig">💾 Save Settings</button>
+    <button id="loadNews" class="secondary">🔄 Load News</button>
+  </div>
+
+  <div class="card">
+    <h2>✏️ Add / Edit News</h2>
+    <input type="hidden" id="editId">
+    <input id="title" placeholder="පුවත් මාතෘකාව (Title)">
+    <textarea id="description" placeholder="පුවතේ විස්තරය (Description)"></textarea>
+    <input id="image" placeholder="පින්තූර URL (https://...)">
+    <div class="row">
+      <select id="category">
+        <option value="general">සාමාන්‍ය</option>
+        <option value="world">ලෝකය</option>
+        <option value="technology">තාක්ෂණය</option>
+        <option value="sports">ක්‍රීඩා</option>
+        <option value="business">ව්‍යාපාර</option>
+      </select>
+      <input id="link" placeholder="External Link (optional)">
+    </div>
+    <button id="saveNews">💾 Save News</button>
+    <button id="clearForm" class="secondary">Clear</button>
+  </div>
+
+  <div class="card">
+    <h2>📋 Your News (<span id="count">0</span>)</h2>
+    <div id="newsList"></div>
+  </div>
+</div>
+
+<script>
+const API = 'https://api.github.com';
+let newsData = [];
+let fileSha = null;
+
+const cfg = JSON.parse(localStorage.getItem('ghcfg') || '{}');
+['token','owner','repo','branch','filepath'].forEach(k => {
+  if (cfg[k]) document.getElementById(k).value = cfg[k];
+});
+
+function showStatus(msg, ok = true) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status ' + (ok ? 'ok' : 'err');
+  setTimeout(() => el.className = 'status', 5000);
+}
+
+function getCfg() {
+  return {
+    token: document.getElementById('token').value.trim(),
+    owner: document.getElementById('owner').value.trim(),
+    repo: document.getElementById('repo').value.trim(),
+    branch: document.getElementById('branch').value.trim() || 'main',
+    filepath: document.getElementById('filepath').value.trim() || 'news.json'
+  };
+}
+
+document.getElementById('saveConfig').addEventListener('click', () => {
+  localStorage.setItem('ghcfg', JSON.stringify(getCfg()));
+  showStatus('Settings saved ✅');
+});
+
+function b64encode(str) { return btoa(unescape(encodeURIComponent(str))); }
+function b64decode(str) { return decodeURIComponent(escape(atob(str))); }
+
+document.getElementById('loadNews').addEventListener('click', loadNews);
+async function loadNews() {
+  const { token, owner, repo, branch, filepath } = getCfg();
+  if (!token || !owner || !repo) return showStatus('Token, owner, repo පුරවන්න', false);
+  try {
+    showStatus('Loading...');
+    const res = await fetch(`${API}/repos/${owner}/${repo}/contents/${filepath}?ref=${branch}&t=${Date.now()}`, {
+      headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github+json' }
+    });
+    if (res.status === 404) {
+      newsData = []; fileSha = null;
+      showStatus('news.json හම්බුනේ නෑ. පළමු save එකේදී හදන්නම්.');
+    } else if (!res.ok) {
+      const err = await res.json(); throw new Error(err.message);
+    } else {
+      const data = await res.json();
+      fileSha = data.sha;
+      const content = JSON.parse(b64decode(data.content));
+      newsData = content.news || [];
+      showStatus(`Loaded ${newsData.length} news ✅`);
+    }
+    renderList();
+  } catch (e) { showStatus('Error: ' + e.message, false); }
+}
+
+async function saveToGitHub() {
+  const { token, owner, repo, branch, filepath } = getCfg();
+  const content = JSON.stringify({ news: newsData }, null, 2);
+  const body = {
+    message: `Update news (${new Date().toISOString()})`,
+    content: b64encode(content),
+    branch
+  };
+  if (fileSha) body.sha = fileSha;
+
+  const res = await fetch(`${API}/repos/${owner}/${repo}/contents/${filepath}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.github+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const err = await res.json(); throw new Error(err.message);
+  }
+  const data = await res.json();
+  fileSha = data.content.sha;
+}
+
+document.getElementById('saveNews').addEventListener('click', async () => {
+  const title = document.getElementById('title').value.trim();
+  const description = document.getElementById('description').value.trim();
+  if (!title) return showStatus('Title එක අනිවාර්යයි', false);
+
+  const id = document.getElementById('editId').value || Date.now().toString();
+  const item = {
+    id, title, description,
+    image: document.getElementById('image').value.trim(),
+    category: document.getElementById('category').value,
+    link: document.getElementById('link').value.trim(),
+    date: new Date().toISOString()
+  };
+
+  const idx = newsData.findIndex(n => n.id === id);
+  if (idx >= 0) newsData[idx] = item;
+  else newsData.unshift(item);
+
+  try {
+    showStatus('Saving...');
+    await saveToGitHub();
+    showStatus('News saved to GitHub ✅ (1-2 min යනවා site එකේ පෙන්නන්න)');
+    clearForm(); renderList();
+  } catch (e) { showStatus('Save error: ' + e.message, false); }
+});
+
+document.getElementById('clearForm').addEventListener('click', clearForm);
+function clearForm() {
+  ['editId','title','description','image','link'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('category').value = 'general';
+}
+
+function renderList() {
+  document.getElementById('count').textContent = newsData.length;
+  const list = document.getElementById('newsList');
+  if (!newsData.length) {
+    list.innerHTML = '<p style="color:#94a3b8;">තාම news නෑ.</p>';
+    return;
+  }
+  list.innerHTML = newsData.map(n => `
+    <div class="news-item">
+      <div class="info">
+        <h3>${escapeHtml(n.title)}</h3>
+        <small>${n.category} • ${new Date(n.date).toLocaleString('si-LK')}</small>
+      </div>
+      <div>
+        <button class="secondary" onclick="editItem('${n.id}')">Edit</button>
+        <button class="danger" onclick="deleteItem('${n.id}')">Delete</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+window.editItem = function(id) {
+  const n = newsData.find(x => x.id === id);
+  if (!n) return;
+  document.getElementById('editId').value = n.id;
+  document.getElementById('title').value = n.title;
+  document.getElementById('description').value = n.description || '';
+  document.getElementById('image').value = n.image || '';
+  document.getElementById('category').value = n.category || 'general';
+  document.getElementById('link').value = n.link || '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+
+window.deleteItem = async function(id) {
+  if (!confirm('මේ news එක delete කරන්නද?')) return;
+  newsData = newsData.filter(n => n.id !== id);
+  try {
+    showStatus('Deleting...');
+    await saveToGitHub();
+    showStatus('Deleted ✅'); renderList();
+  } catch (e) { showStatus('Error: ' + e.message, false); }
+};
+</script>
+</body>
+</html>
